@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
+from django.utils import timezone
 
 
 class Proveedor(models.Model):
@@ -19,7 +20,7 @@ class Proveedor(models.Model):
         blank=True
     )
 
-    email = models.CharField(
+    email = models.EmailField(
         max_length=100,
         null=True,
         blank=True
@@ -38,6 +39,10 @@ class Proveedor(models.Model):
     )
 
     estado = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "proveedores"
+        ordering = ["razon_social"]
 
     def __str__(self):
         return self.razon_social
@@ -66,7 +71,7 @@ class ProveedorXProducto(models.Model):
         validators=[MinValueValidator(0)]
     )
 
-    producto_proveedor = models.CharField(
+    codigo_producto_proveedor = models.CharField(
         max_length=50,
         null=True,
         blank=True
@@ -78,6 +83,23 @@ class ProveedorXProducto(models.Model):
         blank=True
     )
 
+    class Meta:
+        db_table = "proveedores_x_productos"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["proveedor", "producto"],
+                name="uq_proveedor_producto"
+            ),
+            models.CheckConstraint(
+                check=models.Q(precio_compra_referencia__gte=0),
+                name="ck_pxp_precio"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.proveedor} - {self.producto}"
+
+
 class Compra(models.Model):
 
     class EstadoCompra(models.TextChoices):
@@ -87,7 +109,19 @@ class Compra(models.Model):
 
     id_compra = models.AutoField(primary_key=True)
 
-    fecha = models.DateTimeField(auto_now_add=True)
+    proveedor = models.ForeignKey(
+        Proveedor,
+        on_delete=models.PROTECT,
+        db_column="id_proveedor"
+    )
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        db_column="id_usuario"
+    )
+
+    fecha = models.DateTimeField(default=timezone.now)
 
     numero_factura = models.CharField(
         max_length=30,
@@ -113,27 +147,38 @@ class Compra(models.Model):
         blank=True
     )
 
-    proveedor = models.ForeignKey(
-        Proveedor,
-        on_delete=models.PROTECT,
-        db_column="id_proveedor"
-    )
-
-    usuario = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        db_column="id_usuario"
-    )
-
     class Meta:
         db_table = "compras"
+        ordering = ["-fecha"]
+        indexes = [
+            models.Index(fields=["fecha"], name="idx_compras_fecha"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(total__gte=0),
+                name="ck_compras_total"
+            ),
+        ]
 
     def __str__(self):
         return f"Compra {self.id_compra} - {self.proveedor}"
-    
+
 
 class DetalleCompra(models.Model):
     id_detalle_compra = models.AutoField(primary_key=True)
+
+    compra = models.ForeignKey(
+        Compra,
+        on_delete=models.CASCADE,
+        db_column="id_compra",
+        related_name="detalles"
+    )
+
+    producto = models.ForeignKey(
+        "catalogo.Producto",
+        on_delete=models.PROTECT,
+        db_column="id_producto"
+    )
 
     cantidad = models.IntegerField(
         validators=[MinValueValidator(1)]
@@ -151,20 +196,22 @@ class DetalleCompra(models.Model):
         validators=[MinValueValidator(0)]
     )
 
-    compra = models.ForeignKey(
-        Compra,
-        on_delete=models.CASCADE,
-        db_column="id_compra"
-    )
-
-    producto = models.ForeignKey(
-        "catalogo.Producto",
-        on_delete=models.RESTRICT,
-        db_column="id_producto"
-    )
-
     class Meta:
         db_table = "detalles_compras"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(cantidad__gt=0),
+                name="ck_detcompra_cantidad"
+            ),
+            models.CheckConstraint(
+                check=models.Q(precio_unitario__gte=0),
+                name="ck_detcompra_precio"
+            ),
+            models.CheckConstraint(
+                check=models.Q(subtotal__gte=0),
+                name="ck_detcompra_subtotal"
+            ),
+        ]
 
     def __str__(self):
         return f"Detalle {self.id_detalle_compra} - {self.producto}"
